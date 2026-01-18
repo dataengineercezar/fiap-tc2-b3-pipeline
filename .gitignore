@@ -37,3 +37,6 @@ terraform.tfvars
 # Evidências (opcional, se quiser versionar)
 # docs/evidencias/*.png
 terraform/environments/dev/terraform.tfvars
+
+# Data files (will be in S3)
+local_data/

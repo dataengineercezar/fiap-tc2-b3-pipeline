@@ -1,0 +1,6 @@
+=== ETAPA 1 - EVIDÊNCIAS FINAIS ===
+
+Extração de Dados Reais da B3:
+unknown option --ticker
+usage: python [option] ... [-c cmd | -m mod | file | -] [arg] ...
+Try `python -h' for more information.
