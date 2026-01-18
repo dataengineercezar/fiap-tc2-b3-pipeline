@@ -36,3 +36,4 @@ terraform.tfvars
 
 # Evidências (opcional, se quiser versionar)
 # docs/evidencias/*.png
+terraform/environments/dev/terraform.tfvars
