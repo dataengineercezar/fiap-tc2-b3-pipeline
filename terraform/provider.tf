@@ -1,6 +1,6 @@
 terraform {
   required_version = ">= 1.6.0"
-  
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -10,8 +10,9 @@ terraform {
 }
 
 provider "aws" {
-  region = var.aws_region
-  
+  region  = var.aws_region
+  profile = var.aws_profile != "" ? var.aws_profile : null
+
   default_tags {
     tags = {
       Project     = "TechChallenge-Fase2"

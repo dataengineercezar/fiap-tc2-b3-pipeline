@@ -1,0 +1,23 @@
+#!/bin/bash
+# Configure um novo profile AWS com permissões de administrador
+
+echo "=========================================="
+echo "Configurar AWS Profile Admin"
+echo "=========================================="
+echo ""
+echo "Execute este comando interativo:"
+echo ""
+echo "aws configure --profile admin"
+echo ""
+echo "Você precisará fornecer:"
+echo "  - AWS Access Key ID: [sua chave com permissões admin]"
+echo "  - AWS Secret Access Key: [sua secret]"
+echo "  - Default region name: sa-east-1"
+echo "  - Default output format: json"
+echo ""
+echo "Após configurar, teste com:"
+echo "  aws sts get-caller-identity --profile admin"
+echo ""
+echo "Se tiver permissões IAM, verá sucesso."
+echo ""
+echo "Depois, o Terraform usará automaticamente esse profile."
