@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+terraform.tfvars
+!terraform/environments/dev/terraform.tfvars.example
+
+# AWS
+.aws/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data
+*.parquet
+*.csv
+*.json
+!src/tests/fixtures/*.json
+
+# Evidências (opcional, se quiser versionar)
+# docs/evidencias/*.png
