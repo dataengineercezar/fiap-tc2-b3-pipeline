@@ -143,7 +143,9 @@ resource "aws_glue_crawler" "refined" {
   database_name = aws_glue_catalog_database.main.name
 
   s3_target {
-    path = "s3://${var.s3_bucket_name}/refined/"
+    # Para manter o ambiente de apresentação "limpo" (uma tabela principal),
+    # apontamos o crawler para o prefixo do dataset.
+    path = "s3://${var.s3_bucket_name}/refined/dataset=${var.dataset}/"
   }
 
   schedule = "cron(0 23 ? * MON-FRI *)" # 20h BRT (23h UTC), após o Glue Job

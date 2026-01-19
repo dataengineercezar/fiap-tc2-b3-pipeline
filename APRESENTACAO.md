@@ -18,7 +18,9 @@
 
 ### Glue Crawler
 - Manter: `b3-pipeline-crawler-refined-dev`.
-- Data source ideal do crawler: `s3://pos-tech-b3-pipeline-cezar-2026/refined/` **desde que** `refined/` não tenha `daily/monthly/summary`.
+- Para manter **apenas 1 tabela** (ex.: `dataset_petr4`), a data source ideal do crawler é o prefixo do dataset:
+  - `s3://pos-tech-b3-pipeline-cezar-2026/refined/dataset=petr4/`
+  - (Isso evita o crawler criar uma tabela extra chamada `refined` apontando para `.../refined/`.)
 
 ### Athena
 - Use o workgroup do projeto (se existir): `b3-pipeline-athena-dev`.

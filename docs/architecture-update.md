@@ -1,4 +1,10 @@
-# Atualização Arquitetura - Lambda Dupla
+# Atualização Arquitetura - Lambda Dupla (LEGADO)
+
+> Este documento é **histórico**. A versão final do projeto (apresentação) grava Parquet diretamente em `raw/` e usa apenas:
+> - `b3-pipeline-scraping-dev` (scraping → S3 RAW)
+> - `b3-pipeline-trigger-glue-dev` (S3 RAW → inicia Glue)
+>
+> A Lambda `b3-pipeline-converter-dev` não é necessária no fluxo atual e pode ser removida para “limpar” o ambiente.
 
 ## Problema Identificado
 **Requisito 2 violado**: dados brutos em JSON ao invés de Parquet

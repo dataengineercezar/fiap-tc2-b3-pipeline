@@ -1,0 +1,25 @@
+{
+    "LambdaFunctionConfigurations": [
+        {
+            "Id": "TriggerGlue",
+            "LambdaFunctionArn": "arn:aws:lambda:sa-east-1:732592767587:function:b3-pipeline-trigger-glue-dev",
+            "Events": [
+                "s3:ObjectCreated:*"
+            ],
+            "Filter": {
+                "Key": {
+                    "FilterRules": [
+                        {
+                            "Name": "Prefix",
+                            "Value": "raw/dataset="
+                        },
+                        {
+                            "Name": "Suffix",
+                            "Value": ".parquet"
+                        }
+                    ]
+                }
+            }
+        }
+    ]
+}
