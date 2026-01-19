@@ -11,6 +11,11 @@ ENV/
 dist/
 build/
 
+# Lambda deployment packages
+*.zip
+src/lambda/package/
+src/lambda/package_lite/
+
 # Terraform
 .terraform/
 *.tfstate
