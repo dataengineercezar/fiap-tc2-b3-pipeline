@@ -1,5 +1,10 @@
 # Checklist de apresentação + evidências (Tech Challenge)
 
+## Materiais prontos para gravação
+
+- Roteiro detalhado do vídeo (10 min): [docs/ROTEIRO_VIDEO.md](docs/ROTEIRO_VIDEO.md)
+- Script com queries do Athena: [docs/athena_queries.sql](docs/athena_queries.sql)
+
 ## Estado “limpo” esperado (antes do vídeo)
 
 ### S3 (bucket `pos-tech-b3-pipeline-cezar-2026`)
