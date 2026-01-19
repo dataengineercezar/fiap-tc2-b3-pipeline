@@ -16,13 +16,26 @@ build/
 src/lambda/package/
 src/lambda/package_lite/
 
+# Diretórios de dependências vendorizadas (geradas por scripts de build)
+src/lambda/lambda_converter/
+src/lambda/lambda_minimal/
+src/lambda/layer/
+src/lambda/package/
+src/lambda/package_lite/
+
 # Terraform
 .terraform/
 *.tfstate
 *.tfstate.*
-.terraform.lock.hcl
 terraform.tfvars
 !terraform/environments/dev/terraform.tfvars.example
+
+# Logs e artefatos locais
+*.log
+*.whl
+*.pdf
+terraform/**/*.zip
+terraform/**/*.zip.*
 
 # AWS
 .aws/
@@ -36,8 +49,9 @@ terraform.tfvars
 # Data
 *.parquet
 *.csv
-*.json
-!src/tests/fixtures/*.json
+
+# JSON de configuração/infra é parte do projeto, então não ignorar globalmente.
+# Se quiser ignorar arquivos JSON locais específicos, adicione-os explicitamente.
 
 # Evidências (opcional, se quiser versionar)
 # docs/evidencias/*.png

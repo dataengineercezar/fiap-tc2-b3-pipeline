@@ -43,7 +43,7 @@ cd -
 
 echo "4. Criando ZIP..."
 cd "$BUILD_DIR"
-zip -r "../../$OUTPUT_ZIP" . -q
+zip -r "../$(basename "$OUTPUT_ZIP")" . -q
 cd -
 
 # Verificar tamanho

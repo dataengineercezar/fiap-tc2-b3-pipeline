@@ -79,7 +79,7 @@ output "glue_crawler_name" {
   value       = module.glue.glue_crawler_name
 }
 
-# output "athena_workgroup_name" {
-#   description = "Athena workgroup name"
-#   value       = module.athena.workgroup_name
-# }
+output "athena_workgroup_name" {
+  description = "Athena workgroup name"
+  value       = module.athena.workgroup_name
+}

@@ -25,7 +25,7 @@ cp "$LAMBDA_DIR/lambda_trigger_glue.py" "$BUILD_DIR/"
 
 echo "2. Criando ZIP (sem dependências externas - usa boto3 built-in)..."
 cd "$BUILD_DIR"
-zip -r "../../$OUTPUT_ZIP" . -q
+zip -r "../$(basename "$OUTPUT_ZIP")" . -q
 cd -
 
 # Verificar tamanho

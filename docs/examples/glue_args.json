@@ -1,0 +1,5 @@
+{
+  "--S3_BUCKET": "pos-tech-b3-pipeline-cezar-2026",
+  "--DATASET": "petr4",
+  "--TICKER": "petr4"
+}

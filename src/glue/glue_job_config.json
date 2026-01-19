@@ -1,0 +1,21 @@
+{
+    "Role": "arn:aws:iam::732592767587:role/b3-pipeline-glue-job-dev",
+    "Command": {
+        "Name": "glueetl",
+        "ScriptLocation": "s3://pos-tech-b3-pipeline-cezar-2026/glue/scripts/glue_etl_job.py",
+        "PythonVersion": "3"
+    },
+    "DefaultArguments": {
+        "--enable-metrics": "true",
+        "--enable-spark-ui": "true",
+        "--TICKER": "petr4",
+        "--DATASET": "petr4",
+        "--S3_BUCKET": "pos-tech-b3-pipeline-cezar-2026",
+        "--job-language": "python",
+        "--enable-continuous-cloudwatch-log": "true"
+    },
+    "MaxRetries": 0,
+    "GlueVersion": "4.0",
+    "NumberOfWorkers": 2,
+    "WorkerType": "G.1X"
+}

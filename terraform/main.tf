@@ -86,5 +86,14 @@ module "s3_notification" {
   depends_on = [module.lambda, module.glue]
 }
 
-# Modules to be added in subsequent stages
-# module "athena" { ... }
+# Athena (Workgroup + local de resultados)
+module "athena" {
+  source = "./modules/athena"
+
+  project_name   = var.project_name
+  environment    = var.environment
+  s3_bucket_name = var.bucket_name
+  tags           = local.common_tags
+
+  depends_on = [module.s3, module.glue]
+}

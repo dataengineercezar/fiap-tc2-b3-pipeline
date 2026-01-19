@@ -1,9 +1,19 @@
 # Lambda Function para Scraping B3
 # Acionada via EventBridge Schedule
 # Usa S3 para deployment devido ao tamanho do ZIP (>50MB)
+
+resource "aws_s3_object" "lambda_scraping_zip" {
+  bucket = var.s3_bucket_name
+  key    = "lambda-deployments/lambda_scraping.zip"
+  source = "${path.root}/../build/lambda_scraping.zip"
+  etag   = filemd5("${path.root}/../build/lambda_scraping.zip")
+
+  tags = var.tags
+}
+
 resource "aws_lambda_function" "scraping" {
   s3_bucket        = var.s3_bucket_name
-  s3_key           = "lambda-deployments/lambda_scraping.zip"
+  s3_key           = aws_s3_object.lambda_scraping_zip.key
   function_name    = "${var.project_name}-scraping-${var.environment}"
   role             = var.lambda_scraping_role_arn
   handler          = "lambda_scraping.lambda_handler"

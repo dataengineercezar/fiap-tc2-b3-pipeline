@@ -1,26 +1,26 @@
-"""
-Lambda function para scraping diário de dados da B3 - LIGHTWEIGHT VERSION
-Acionada via EventBridge Schedule  
-Atende Requisito R1: extração automatizada de dados B3
+"""Lambda de scraping diário (B3).
 
-Salva CSV (não Parquet) para reduzir tamanho do deployment package
-Glue converterá CSV → Parquet na camada refined/
+- R1: extração diária (BRAPI)
+- R2: ingestão em S3 RAW em formato Parquet com partição diária
+
+Escreve Parquet diretamente em `raw/` para manter o pipeline simples e aderente ao Tech Challenge.
 """
 
 import json
 import logging
 import os
-from datetime import datetime, timedelta
-from io import StringIO
+from datetime import datetime
+from io import BytesIO
 
 import boto3
+import pandas as pd
 import requests
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
-def fetch_brapi_data(ticker: str, days: int = 1) -> list:
+def fetch_brapi_data(ticker: str, days: int = 30) -> list:
     """
     Busca dados da BRAPI.DEV API
     Retorna lista de dicts
@@ -41,7 +41,8 @@ def fetch_brapi_data(ticker: str, days: int = 1) -> list:
     else:
         range_param = "max"
     
-    url = f"https://brapi.dev/api/quote/{ticker}?range={range_param}"
+    # interval=1d necessário para obter historicalDataPrice
+    url = f"https://brapi.dev/api/quote/{ticker}?range={range_param}&interval=1d"
     headers = {"Accept": "application/json"}
     
     # Retry logic
@@ -69,9 +70,9 @@ def fetch_brapi_data(ticker: str, days: int = 1) -> list:
     return []
 
 
-def prepare_dataframe(raw_data: list, ticker: str) -> list:
+def prepare_records(raw_data: list, ticker: str) -> list[dict]:
     """
-    Transforma dados brutos em formato padronizado
+    Transforma dados brutos em formato padronizado.
     Retorna lista de dicts com colunas: Date, Open, High, Low, Close, Volume, ticker
     """
     records = []
@@ -101,59 +102,52 @@ def prepare_dataframe(raw_data: list, ticker: str) -> list:
     return records
 
 
-def save_to_s3_csv(records: list, bucket: str, prefix: str, dataset: str, ticker: str) -> list:
-    """
-    Salva registros em CSV no S3 com particionamento por data
-    """
-    s3_client = boto3.client('s3')
+def save_to_s3_parquet(records: list[dict], bucket: str, dataset: str, ticker: str) -> list[str]:
+    """Salva Parquet particionado por data em raw/ (R2)."""
+
+    s3_client = boto3.client("s3")
     ticker_normalized = ticker.lower()
-    
-    # Agrupar por data
-    by_date = {}
+
+    by_date: dict[str, list[dict]] = {}
     for record in records:
-        date_str = record["Date"]
-        if date_str not in by_date:
-            by_date[date_str] = []
-        by_date[date_str].append(record)
-    
-    uploaded_files = []
-    
+        by_date.setdefault(record["Date"], []).append(record)
+
+    uploaded_files: list[str] = []
     for date_str, group in by_date.items():
-        # Parse date para partições
         dt = datetime.strptime(date_str, "%Y-%m-%d")
-        year = dt.year
-        month = dt.month
-        day = dt.day
-        
-        s3_key = (
-            f"{prefix}/dataset={dataset}/ticker={ticker_normalized}/"
-            f"year={year}/month={month:02d}/day={day:02d}/data.csv"
+
+        df = pd.DataFrame(group)
+
+        # Tipos consistentes (evita schema drift entre dias)
+        df["Date"] = df["Date"].astype(str)
+        for col_name in ["Open", "High", "Low", "Close", "Volume"]:
+            df[col_name] = pd.to_numeric(df[col_name], errors="coerce").astype("float64")
+        df["ticker"] = df["ticker"].astype(str)
+
+        parquet_buffer = BytesIO()
+        df.to_parquet(
+            parquet_buffer,
+            engine="pyarrow",
+            compression="snappy",
+            index=False,
         )
-        
-        # Criar CSV em memória
-        csv_buffer = StringIO()
-        
-        # Header
-        if group:
-            headers = list(group[0].keys())
-            csv_buffer.write(",".join(headers) + "\n")
-            
-            # Rows
-            for row in group:
-                values = [str(row.get(h, "")) for h in headers]
-                csv_buffer.write(",".join(values) + "\n")
-        
-        # Upload
+        parquet_buffer.seek(0)
+
+        s3_key = (
+            f"raw/dataset={dataset}/ticker={ticker_normalized}/"
+            f"year={dt.year}/month={dt.month:02d}/day={dt.day:02d}/data.parquet"
+        )
+
         s3_client.put_object(
             Bucket=bucket,
             Key=s3_key,
-            Body=csv_buffer.getvalue(),
-            ContentType='text/csv'
+            Body=parquet_buffer.getvalue(),
+            ContentType="application/x-parquet",
         )
-        
+
         uploaded_files.append(s3_key)
-        logger.info(f"Uploaded: s3://{bucket}/{s3_key}")
-    
+        logger.info(f"Uploaded Parquet: s3://{bucket}/{s3_key} ({len(group)} records)")
+
     return uploaded_files
 
 
@@ -170,8 +164,7 @@ def lambda_handler(event, context):
     ticker = os.environ.get('TICKER', 'PETR4')
     dataset = os.environ.get('DATASET', 'petr4')
     bucket = os.environ.get('S3_BUCKET')
-    prefix = os.environ.get('S3_PREFIX', 'raw')
-    days = int(os.environ.get('DAYS', '5'))  # Últimos 5 dias (para pegar novos)
+    days = int(os.environ.get('DAYS', '30'))
     
     if not bucket:
         raise ValueError("S3_BUCKET environment variable not set")
@@ -193,11 +186,11 @@ def lambda_handler(event, context):
             }
         
         # 2. Transform
-        records = prepare_dataframe(raw_data, ticker)
+        records = prepare_records(raw_data, ticker)
         logger.info(f"Processing {len(records)} records")
         
-        # 3. Save to S3
-        uploaded_files = save_to_s3_csv(records, bucket, prefix, dataset, ticker)
+        # 3. Save to S3 (Parquet direto no RAW)
+        uploaded_files = save_to_s3_parquet(records, bucket, dataset, ticker)
         
         logger.info("="*70)
         logger.info("LAMBDA SCRAPING B3 - CONCLUÍDO COM SUCESSO")
@@ -207,7 +200,7 @@ def lambda_handler(event, context):
         return {
             "statusCode": 200,
             "body": json.dumps({
-                "message": "Data scraped and uploaded successfully",
+                "message": "Data scraped and uploaded to RAW (Parquet) successfully",
                 "files_uploaded": len(uploaded_files),
                 "s3_keys": uploaded_files
             })

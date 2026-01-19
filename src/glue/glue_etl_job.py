@@ -12,8 +12,8 @@ Output: s3://bucket/refined/dataset=petr4/ticker=petr4/year=YYYY/month=MM/day=DD
 """
 
 import sys
-from datetime import datetime
-from awsglue.transforms import *
+
+import boto3
 from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from awsglue.context import GlueContext
@@ -21,18 +21,36 @@ from awsglue.job import Job
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
+
+def list_parquet_files(bucket: str, prefix: str) -> list[str]:
+    s3 = boto3.client("s3", region_name="sa-east-1")
+    paginator = s3.get_paginator("list_objects_v2")
+    uris: list[str] = []
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            key = obj.get("Key")
+            if key and key.endswith(".parquet"):
+                uris.append(f"s3://{bucket}/{key}")
+    return sorted(uris)
+
 # Parâmetros do Job
 args = getResolvedOptions(sys.argv, [
     'JOB_NAME',
     'S3_BUCKET',
     'DATASET',
-    'TICKER'
+    'TICKER',
+    'CRAWLER_NAME'
 ])
 
 # Inicialização
 sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
+
+# Desabilitar leitura vetorizada do Parquet para permitir conversão de tipos
+spark.conf.set("spark.sql.parquet.enableVectorizedReader", "false")
+spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
@@ -41,6 +59,7 @@ print("GLUE ETL JOB - INICIANDO")
 print(f"Dataset: {args['DATASET']}")
 print(f"Ticker: {args['TICKER']}")
 print(f"Bucket: {args['S3_BUCKET']}")
+print(f"Crawler: {args['CRAWLER_NAME']}")
 print("=" * 70)
 
 
@@ -52,42 +71,59 @@ print("\n[1/5] Lendo dados RAW do S3...")
 input_path = f"s3://{args['S3_BUCKET']}/raw/dataset={args['DATASET']}/ticker={args['TICKER']}/"
 print(f"Input Path: {input_path}")
 
-# Ler CSV (dados novos do Lambda) OU Parquet (dados históricos)
-df_raw = None
-
-# Tentativa 1: CSV
+# Ler Parquet (formato mandatório por R2 do Tech Challenge)
 try:
-    print("Tentando ler CSV...")
-    df_raw = spark.read \
-        .option("header", "true") \
-        .option("inferSchema", "true") \
-        .csv(input_path + "**/*.csv")
+    print("Listando arquivos Parquet (S3) e lendo arquivo-a-arquivo para evitar conflito de schema...")
+
+    input_prefix = f"raw/dataset={args['DATASET']}/ticker={args['TICKER']}/"
+    parquet_files = list_parquet_files(args["S3_BUCKET"], input_prefix)
+
+    if not parquet_files:
+        raise ValueError(f"Nenhum arquivo Parquet encontrado em {input_path}")
+
+    print(f"✅ Arquivos Parquet encontrados: {len(parquet_files)}")
+
+    dfs = []
+    for uri in parquet_files:
+        df_part = spark.read.parquet(uri)
+
+        # Normalizar nomes: usar 'ticker' como chave (coluna pode vir como 'Ticker' no arquivo)
+        if "ticker" not in df_part.columns and "Ticker" in df_part.columns:
+            df_part = df_part.withColumnRenamed("Ticker", "ticker")
+
+        # Forçar tipos numéricos para double (elimina long vs double)
+        for col_name in ["Open", "High", "Low", "Close", "Volume"]:
+            if col_name in df_part.columns:
+                df_part = df_part.withColumn(col_name, F.col(col_name).cast("double"))
+
+        # Padronizar Date como string
+        if "Date" in df_part.columns:
+            df_part = df_part.withColumn("Date", F.col("Date").cast("string"))
+
+        # Remover partições físicas do raw (recriadas depois)
+        columns_to_drop = [c for c in ["year", "month", "day"] if c in df_part.columns]
+        if columns_to_drop:
+            df_part = df_part.drop(*columns_to_drop)
+
+        dfs.append(df_part)
+
+    df_raw = dfs[0]
+    for df_part in dfs[1:]:
+        df_raw = df_raw.unionByName(df_part, allowMissingColumns=True)
     
     count = df_raw.count()
-    if count > 0:
-        print(f"✅ Registros CSV lidos: {count}")
-    else:
-        print("⚠️  CSV vazio")
-        df_raw = None
+    print(f"✅ Registros lidos: {count}")
+    
+    if count == 0:
+        raise ValueError(f"Nenhum registro encontrado em {input_path}")
+    
+    df_raw.printSchema()
+    print(f"Colunas do DataFrame: {df_raw.columns}")
+    
 except Exception as e:
-    print(f"⚠️  Erro ao ler CSV: {e}")
-    df_raw = None
+    print(f"❌ Erro ao ler Parquet: {e}")
+    raise ValueError(f"Falha ao ler dados Parquet de {input_path}: {e}")
 
-# Tentativa 2: Parquet (se CSV falhou)
-if df_raw is None:
-    try:
-        print("Tentando ler Parquet...")
-        df_raw = spark.read.parquet(input_path)
-        count = df_raw.count()
-        print(f"✅ Registros Parquet lidos: {count}")
-    except Exception as e:
-        print(f"❌ Erro ao ler Parquet: {e}")
-        raise ValueError(f"Nenhum dado encontrado em {input_path}")
-
-if df_raw is None:
-    raise ValueError("DataFrame vazio após leitura")
-
-df_raw.printSchema()
 
 
 # ===================================================================
@@ -157,14 +193,16 @@ print("   - Dias_Desde_Inicio (dias desde primeira data)")
 # ===================================================================
 print("\n[4/5] TRANSFORMAÇÃO A: Agregações por ticker e período...")
 
-# Adicionar colunas de agrupamento temporal
+# Criar colunas year/month/day a partir do campo Date (string "yyyy-MM-dd")
+# Garantir que sejam Strings para particionamento mais seguro
 df_with_periods = df_with_calculations \
-    .withColumn("Year", F.year("Date")) \
-    .withColumn("Month", F.month("Date")) \
-    .withColumn("Week", F.weekofyear("Date"))
+    .withColumn("year", F.year(F.to_date(F.col("Date"), "yyyy-MM-dd")).cast("string")) \
+    .withColumn("month", F.month(F.to_date(F.col("Date"), "yyyy-MM-dd")).cast("string")) \
+    .withColumn("day", F.dayofmonth(F.to_date(F.col("Date"), "yyyy-MM-dd")).cast("string")) \
+    .withColumn("Week", F.weekofyear(F.to_date(F.col("Date"), "yyyy-MM-dd")))
 
-# Agregações mensais
-df_monthly_agg = df_with_periods.groupBy("ticker", "dataset", "Year", "Month").agg(
+# Agregações mensais (R5-A: agrupamento, soma, contagem)
+df_monthly_agg = df_with_periods.groupBy("ticker", "year", "month").agg(
     F.count("*").alias("Qtd_Dias_Negociacao"),
     F.avg("Preco_Fechamento").alias("Preco_Medio_Mensal"),
     F.min("Low").alias("Preco_Minimo_Mensal"),
@@ -174,7 +212,7 @@ df_monthly_agg = df_with_periods.groupBy("ticker", "dataset", "Year", "Month").a
     F.stddev("Preco_Fechamento").alias("Preco_Desvio_Padrao"),
     F.first("Date").alias("Primeira_Data"),
     F.last("Date").alias("Ultima_Data")
-).withColumn("Periodo", F.concat(F.col("Year"), F.lit("-"), F.lpad(F.col("Month"), 2, "0")))
+).withColumn("Periodo", F.concat(F.col("year"), F.lit("-"), F.lpad(F.col("month"), 2, "0")))
 
 print(f"✅ Agregações mensais criadas: {df_monthly_agg.count()} registros")
 print("   - Qtd_Dias_Negociacao (COUNT)")
@@ -184,7 +222,7 @@ print("   - Volume_Medio_Mensal (AVG)")
 print("   - Preco_Desvio_Padrao (STDDEV)")
 
 # Agregação geral (totalizador)
-df_total_agg = df_with_periods.groupBy("ticker", "dataset").agg(
+df_total_agg = df_with_periods.groupBy("ticker").agg(
     F.count("*").alias("Total_Dias_Analisados"),
     F.sum("Volume_Negociado").alias("Volume_Total_Periodo"),
     F.avg("Preco_Fechamento").alias("Preco_Medio_Periodo"),
@@ -198,46 +236,39 @@ print(f"✅ Agregação geral criada: {df_total_agg.count()} registro")
 
 
 # ===================================================================
-# ETAPA 5: ESCRITA DOS DADOS REFINADOS NO S3
+# ETAPA 5: ESCRITA DOS DADOS REFINADOS NO S3 (Requisito R6)
 # ===================================================================
 print("\n[5/5] Escrevendo dados refinados no S3...")
 
-# Output 1: Dados diários com transformações
-output_daily_path = f"s3://{args['S3_BUCKET']}/refined/dataset={args['DATASET']}/ticker={args['TICKER']}/daily/"
+# Output principal (R6): refined/ particionado por data e por ação/índice (ticker) e dataset
+ticker_norm = args['TICKER'].lower()
+dataset_norm = args['DATASET'].lower()
+output_daily_path = (
+    f"s3://{args['S3_BUCKET']}/refined/"
+    f"dataset={dataset_norm}/ticker={ticker_norm}/"
+)
 print(f"Output Daily Path: {output_daily_path}")
 
-df_with_calculations \
+# Evitar metadados inválidos no Athena: colunas duplicadas com partições (ex: ticker=...)
+df_daily_out = df_with_periods
+for col_to_drop in ["ticker", "dataset"]:
+    if col_to_drop in df_daily_out.columns:
+        df_daily_out = df_daily_out.drop(col_to_drop)
+
+# df_daily_out já tem year, month, day como strings criadas na ETAPA 4
+df_daily_out \
     .repartition(1) \
     .write \
     .mode("overwrite") \
     .partitionBy("year", "month", "day") \
     .parquet(output_daily_path)
 
-print(f"✅ Dados diários escritos: {df_with_calculations.count()} registros")
+print(f"✅ Dados diários escritos: {df_daily_out.count()} registros")
 
-# Output 2: Agregações mensais
-output_monthly_path = f"s3://{args['S3_BUCKET']}/refined/dataset={args['DATASET']}/ticker={args['TICKER']}/monthly/"
-print(f"Output Monthly Path: {output_monthly_path}")
-
-df_monthly_agg \
-    .repartition(1) \
-    .write \
-    .mode("overwrite") \
-    .parquet(output_monthly_path)
-
-print(f"✅ Agregações mensais escritas: {df_monthly_agg.count()} registros")
-
-# Output 3: Agregação total
-output_total_path = f"s3://{args['S3_BUCKET']}/refined/dataset={args['DATASET']}/ticker={args['TICKER']}/summary/"
-print(f"Output Total Path: {output_total_path}")
-
-df_total_agg \
-    .repartition(1) \
-    .write \
-    .mode("overwrite") \
-    .parquet(output_total_path)
-
-print(f"✅ Agregação total escrita: {df_total_agg.count()} registro")
+# Mantemos as agregações (R5-A) calculadas no job, mas não gravamos outputs adicionais
+# para evitar poluir o S3 refined/ e criar múltiplas tabelas no Glue Catalog.
+print(f"✅ Agregações mensais calculadas (R5-A): {df_monthly_agg.count()} registros")
+print(f"✅ Agregação total calculada (R5-A): {df_total_agg.count()} registro")
 
 
 # ===================================================================
@@ -252,8 +283,20 @@ print(f"  ✅ R5-B: Renomeação de colunas (Close, Volume)")
 print(f"  ✅ R5-C: Cálculos temporais (Moving Avg, Variação %, Dias)")
 print("\nOUTPUTS GERADOS:")
 print(f"  1. Daily: {output_daily_path}")
-print(f"  2. Monthly: {output_monthly_path}")
-print(f"  3. Summary: {output_total_path}")
+print("  2. Monthly/Summary: (não gravados; demonstrados via SQL no Athena)")
 print("=" * 70)
+
+
+# ===================================================================
+# CATALOGAÇÃO (R7): disparar o crawler automaticamente após a escrita
+# ===================================================================
+print("\nIniciando Glue Crawler para catalogar dados refined (R7)...")
+try:
+    glue = boto3.client("glue")
+    glue.start_crawler(Name=args["CRAWLER_NAME"])
+    print(f"✅ Crawler iniciado: {args['CRAWLER_NAME']}")
+except Exception as e:
+    # Não falhar o job por causa do crawler; registrar e seguir.
+    print(f"⚠️ Não foi possível iniciar o crawler automaticamente: {e}")
 
 job.commit()

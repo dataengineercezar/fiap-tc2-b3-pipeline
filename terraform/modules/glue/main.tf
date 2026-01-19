@@ -48,6 +48,27 @@ resource "aws_iam_role_policy" "glue_s3_access" {
   })
 }
 
+# Policy para permitir que o próprio job dispare o crawler ao final (R7)
+resource "aws_iam_role_policy" "glue_crawler_control" {
+  name = "glue-crawler-control"
+  role = aws_iam_role.glue_job.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "glue:StartCrawler",
+          "glue:GetCrawler",
+          "glue:GetCrawlerMetrics"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 # Attach AWS managed policy para Glue Service
 resource "aws_iam_role_policy_attachment" "glue_service" {
   role       = aws_iam_role.glue_job.name
@@ -90,6 +111,7 @@ resource "aws_glue_job" "etl" {
     "--S3_BUCKET"                        = var.s3_bucket_name
     "--DATASET"                          = var.dataset
     "--TICKER"                           = var.ticker
+    "--CRAWLER_NAME"                      = aws_glue_crawler.refined.name
   }
 
   execution_property {

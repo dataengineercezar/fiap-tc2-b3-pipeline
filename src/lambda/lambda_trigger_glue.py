@@ -8,6 +8,7 @@ import json
 import logging
 import os
 from datetime import datetime
+from urllib.parse import unquote_plus
 
 import boto3
 
@@ -15,6 +16,15 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 glue_client = boto3.client('glue')
+
+
+def _extract_partition_value(key: str, partition_name: str) -> str | None:
+    needle = f"{partition_name}="
+    for part in key.split("/"):
+        if part.startswith(needle):
+            value = part[len(needle):].strip()
+            return value or None
+    return None
 
 
 def lambda_handler(event, context):
@@ -37,7 +47,7 @@ def lambda_handler(event, context):
         for record in event['Records']:
             # Obter informações do objeto S3
             bucket = record['s3']['bucket']['name']
-            key = record['s3']['object']['key']
+            key = unquote_plus(record['s3']['object']['key'])
             
             logger.info(f"New object detected: s3://{bucket}/{key}")
             
@@ -46,11 +56,24 @@ def lambda_handler(event, context):
                 logger.info(f"Skipping: object not in raw/ path")
                 continue
             
+            # Extrair partições do path (raw/dataset=.../ticker=...)
+            dataset = _extract_partition_value(key, "dataset")
+            ticker = _extract_partition_value(key, "ticker")
+
+            if not dataset or not ticker:
+                logger.warning(
+                    "Skipping: could not extract dataset/ticker from key: %s",
+                    key,
+                )
+                continue
+
             # Iniciar Glue Job
             response = glue_client.start_job_run(
                 JobName=glue_job_name,
                 Arguments={
                     '--S3_BUCKET': bucket,
+                    '--DATASET': dataset,
+                    '--TICKER': ticker,
                     '--S3_KEY': key,
                     '--EXECUTION_TIME': datetime.now().isoformat()
                 }
