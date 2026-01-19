@@ -44,14 +44,14 @@ Diagrama do fluxo ponta-a-ponta (o que você deve mostrar no vídeo):
 
 ```mermaid
 flowchart LR
-	EB[EventBridge\n(opcional)] --> LS[Lambda Scraping\nR1]
-	LS --> RAW[(S3 RAW\nParquet + partição diária\nR2)]
-	RAW -->|ObjectCreated em raw/| LT[Lambda Trigger Glue\nR3/R4]
-	LT --> GJ[Glue Job ETL\nR5/R6]
-	GJ --> REF[(S3 REFINED\nParquet + partição por data+ticker\nR6)]
-	GJ --> CR[Glue Crawler\nR7]
-	CR --> GC[(Glue Data Catalog\nTabela)]
-	GC --> ATH[Athena SQL\nR8]
+	EB[EventBridge<br/>(opcional)] --> LS[Lambda Scraping<br/>R1]
+	LS --> RAW[(S3 RAW<br/>Parquet + partição diária<br/>R2)]
+	RAW -->|ObjectCreated em raw/| LT[Lambda Trigger Glue<br/>R3/R4]
+	LT --> GJ[Glue Job ETL<br/>R5/R6]
+	GJ --> REF[(S3 REFINED<br/>Parquet + partição por data+ticker<br/>R6)]
+	GJ --> CR[Glue Crawler<br/>R7]
+	CR --> GC[(Glue Data Catalog<br/>Tabela)]
+	GC --> ATH[Athena SQL<br/>R8]
 ```
 
 Componentes AWS envolvidos:
