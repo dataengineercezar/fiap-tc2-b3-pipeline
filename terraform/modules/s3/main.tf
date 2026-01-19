@@ -79,16 +79,3 @@ resource "aws_s3_bucket_lifecycle_configuration" "data_lake" {
     }
   }
 }
-
-# Event notification para Lambda (será usado na Etapa 3 - Requisito R3)
-resource "aws_s3_bucket_notification" "data_lake_events" {
-  bucket = aws_s3_bucket.data_lake.id
-
-  # Será configurado na próxima etapa quando criar Lambda
-  # lambda_function {
-  #   lambda_function_arn = var.lambda_function_arn
-  #   events              = ["s3:ObjectCreated:*"]
-  #   filter_prefix       = "raw/"
-  #   filter_suffix       = ".parquet"
-  # }
-}

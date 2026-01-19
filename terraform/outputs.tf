@@ -58,20 +58,26 @@ output "eventbridge_schedule_expression" {
   value       = module.eventbridge.schedule_expression
 }
 
-# output "glue_job_name" {
-#   description = "Glue Job name"
-#   value       = module.glue.job_name
-# }
+# Glue Outputs
+output "glue_job_name" {
+  description = "Glue Job name"
+  value       = module.glue.glue_job_name
+}
 
-# output "glue_database_name" {
-#   description = "Glue Database name"
-#   value       = module.glue.database_name
-# }
+output "glue_job_arn" {
+  description = "Glue Job ARN"
+  value       = module.glue.glue_job_arn
+}
 
-# output "lambda_function_name" {
-#   description = "Lambda function name"
-#   value       = module.lambda.function_name
-# }
+output "glue_database_name" {
+  description = "Glue Database name"
+  value       = module.glue.glue_database_name
+}
+
+output "glue_crawler_name" {
+  description = "Glue Crawler name"
+  value       = module.glue.glue_crawler_name
+}
 
 # output "athena_workgroup_name" {
 #   description = "Athena workgroup name"

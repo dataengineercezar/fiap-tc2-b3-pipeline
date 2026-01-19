@@ -1,128 +1,154 @@
 """
-Lambda function para scraping diário de dados da B3
-Acionada via EventBridge Schedule
+Lambda function para scraping diário de dados da B3 - LIGHTWEIGHT VERSION
+Acionada via EventBridge Schedule  
 Atende Requisito R1: extração automatizada de dados B3
+
+Salva CSV (não Parquet) para reduzir tamanho do deployment package
+Glue converterá CSV → Parquet na camada refined/
 """
 
 import json
 import logging
 import os
 from datetime import datetime, timedelta
+from io import StringIO
 
 import boto3
-import pandas as pd
 import requests
-from io import BytesIO
-import pyarrow as pa
-import pyarrow.parquet as pq
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
-def fetch_brapi_data(ticker: str, days: int = 1) -> pd.DataFrame:
+def fetch_brapi_data(ticker: str, days: int = 1) -> list:
     """
     Busca dados da BRAPI.DEV API
+    Retorna lista de dicts
     """
     logger.info(f"Fetching data for {ticker} from BRAPI.DEV")
     
-    # Calcular range
+    # BRAPI suporta: 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max
     if days <= 5:
-        range_period = '5d'
+        range_param = f"{days}d"
     elif days <= 30:
-        range_period = '1mo'
+        range_param = "1mo"
     elif days <= 90:
-        range_period = '3mo'
+        range_param = "3mo"
+    elif days <= 180:
+        range_param = "6mo"
+    elif days <= 365:
+        range_param = "1y"
     else:
-        range_period = '1y'
+        range_param = "max"
     
-    url = f"https://brapi.dev/api/quote/{ticker}"
-    params = {
-        'range': range_period,
-        'interval': '1d',
-        'fundamental': 'false'
-    }
+    url = f"https://brapi.dev/api/quote/{ticker}?range={range_param}"
+    headers = {"Accept": "application/json"}
     
-    response = requests.get(url, params=params, timeout=30)
-    response.raise_for_status()
+    # Retry logic
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            # Estrutura: {"results": [{"symbol": "PETR4", "historicalDataPrice": [...]}]}
+            if "results" in data and len(data["results"]) > 0:
+                historical = data["results"][0].get("historicalDataPrice", [])
+                logger.info(f"Fetched {len(historical)} records")
+                return historical
+            else:
+                logger.warning(f"No data in response: {data}")
+                return []
+                
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Attempt {attempt + 1}/{max_retries} failed: {e}")
+            if attempt == max_retries - 1:
+                raise
     
-    data = response.json()
-    
-    if 'results' not in data or not data['results']:
-        raise ValueError("Empty response from API")
-    
-    stock_data = data['results'][0]
-    historical = stock_data.get('historicalDataPrice', [])
-    
-    if not historical:
-        raise ValueError("No historical data available")
-    
-    # Converter para DataFrame
-    df = pd.DataFrame(historical)
-    df = df.rename(columns={
-        'date': 'Date',
-        'open': 'Open',
-        'high': 'High',
-        'low': 'Low',
-        'close': 'Close',
-        'volume': 'Volume'
-    })
-    
-    df['Date'] = pd.to_datetime(df['Date'], unit='s')
-    df['Adj Close'] = df['Close']
-    
-    logger.info(f"Fetched {len(df)} records")
-    
-    return df
+    return []
 
 
-def process_data(df: pd.DataFrame, ticker: str, dataset: str) -> pd.DataFrame:
+def prepare_dataframe(raw_data: list, ticker: str) -> list:
     """
-    Adiciona metadados e colunas de particionamento
+    Transforma dados brutos em formato padronizado
+    Retorna lista de dicts com colunas: Date, Open, High, Low, Close, Volume, ticker
     """
-    ticker_normalized = ticker.replace(".SA", "").lower()
+    records = []
     
-    df['ticker'] = ticker_normalized
-    df['dataset'] = dataset
-    df['extraction_timestamp'] = datetime.now().isoformat()
-    df['data_source'] = 'lambda_brapi_api'
+    for item in raw_data:
+        try:
+            # Timestamp UNIX → datetime
+            timestamp = item.get("date")
+            if timestamp:
+                dt = datetime.fromtimestamp(timestamp)
+                date_str = dt.strftime("%Y-%m-%d")
+                
+                record = {
+                    "Date": date_str,
+                    "Open": item.get("open", 0),
+                    "High": item.get("high", 0),
+                    "Low": item.get("low", 0),
+                    "Close": item.get("close", 0),
+                    "Volume": item.get("volume", 0),
+                    "ticker": ticker.lower()
+                }
+                records.append(record)
+        except Exception as e:
+            logger.warning(f"Error processing record: {e}")
+            continue
     
-    df['date'] = pd.to_datetime(df['Date']).dt.date
-    df['year'] = pd.to_datetime(df['Date']).dt.year
-    df['month'] = pd.to_datetime(df['Date']).dt.month
-    df['day'] = pd.to_datetime(df['Date']).dt.day
-    
-    return df
+    return records
 
 
-def upload_to_s3(df: pd.DataFrame, bucket: str, prefix: str, ticker: str, dataset: str):
+def save_to_s3_csv(records: list, bucket: str, prefix: str, dataset: str, ticker: str) -> list:
     """
-    Upload para S3 com particionamento diário
+    Salva registros em CSV no S3 com particionamento por data
     """
     s3_client = boto3.client('s3')
-    ticker_normalized = ticker.replace(".SA", "").lower()
+    ticker_normalized = ticker.lower()
+    
+    # Agrupar por data
+    by_date = {}
+    for record in records:
+        date_str = record["Date"]
+        if date_str not in by_date:
+            by_date[date_str] = []
+        by_date[date_str].append(record)
     
     uploaded_files = []
     
-    for date, group in df.groupby(['year', 'month', 'day']):
-        year, month, day = date
+    for date_str, group in by_date.items():
+        # Parse date para partições
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        year = dt.year
+        month = dt.month
+        day = dt.day
         
         s3_key = (
             f"{prefix}/dataset={dataset}/ticker={ticker_normalized}/"
-            f"year={year}/month={month:02d}/day={day:02d}/data.parquet"
+            f"year={year}/month={month:02d}/day={day:02d}/data.csv"
         )
         
-        # Converter para Parquet em memória
-        table = pa.Table.from_pandas(group)
-        buffer = BytesIO()
-        pq.write_table(table, buffer)
-        buffer.seek(0)
+        # Criar CSV em memória
+        csv_buffer = StringIO()
+        
+        # Header
+        if group:
+            headers = list(group[0].keys())
+            csv_buffer.write(",".join(headers) + "\n")
+            
+            # Rows
+            for row in group:
+                values = [str(row.get(h, "")) for h in headers]
+                csv_buffer.write(",".join(values) + "\n")
         
         # Upload
         s3_client.put_object(
             Bucket=bucket,
             Key=s3_key,
-            Body=buffer.getvalue()
+            Body=csv_buffer.getvalue(),
+            ContentType='text/csv'
         )
         
         uploaded_files.append(s3_key)
@@ -136,7 +162,7 @@ def lambda_handler(event, context):
     Lambda handler - executado pelo EventBridge Schedule
     """
     logger.info("="*70)
-    logger.info("LAMBDA SCRAPING B3 - INICIANDO")
+    logger.info("LAMBDA SCRAPING B3 - INICIANDO (LIGHTWEIGHT)")
     logger.info(f"Event: {json.dumps(event)}")
     logger.info("="*70)
     
@@ -148,38 +174,30 @@ def lambda_handler(event, context):
     days = int(os.environ.get('DAYS', '5'))  # Últimos 5 dias (para pegar novos)
     
     if not bucket:
-        raise ValueError("S3_BUCKET environment variable is required")
+        raise ValueError("S3_BUCKET environment variable not set")
     
     logger.info(f"Config: ticker={ticker}, dataset={dataset}, bucket={bucket}, days={days}")
     
     try:
-        # Extrair dados
-        df = fetch_brapi_data(ticker=ticker, days=days)
+        # 1. Fetch data
+        raw_data = fetch_brapi_data(ticker, days)
         
-        if df.empty:
-            logger.warning("No data fetched. Exiting.")
+        if not raw_data:
+            logger.warning("No data fetched from API")
             return {
-                'statusCode': 200,
-                'body': json.dumps({'message': 'No new data available'})
+                "statusCode": 200,
+                "body": json.dumps({
+                    "message": "No new data available",
+                    "files_uploaded": 0
+                })
             }
         
-        # Processar
-        df = process_data(df=df, ticker=ticker, dataset=dataset)
+        # 2. Transform
+        records = prepare_dataframe(raw_data, ticker)
+        logger.info(f"Processing {len(records)} records")
         
-        # Filtrar apenas último dia (evitar duplicatas)
-        latest_date = df['date'].max()
-        df_today = df[df['date'] == latest_date]
-        
-        logger.info(f"Processing {len(df_today)} records for {latest_date}")
-        
-        # Upload para S3
-        uploaded_files = upload_to_s3(
-            df=df_today,
-            bucket=bucket,
-            prefix=prefix,
-            ticker=ticker,
-            dataset=dataset
-        )
+        # 3. Save to S3
+        uploaded_files = save_to_s3_csv(records, bucket, prefix, dataset, ticker)
         
         logger.info("="*70)
         logger.info("LAMBDA SCRAPING B3 - CONCLUÍDO COM SUCESSO")
@@ -187,22 +205,14 @@ def lambda_handler(event, context):
         logger.info("="*70)
         
         return {
-            'statusCode': 200,
-            'body': json.dumps({
-                'message': 'Data scraped and uploaded successfully',
-                'records_processed': len(df_today),
-                'date': str(latest_date),
-                'files_uploaded': uploaded_files
+            "statusCode": 200,
+            "body": json.dumps({
+                "message": "Data scraped and uploaded successfully",
+                "files_uploaded": len(uploaded_files),
+                "s3_keys": uploaded_files
             })
         }
         
     except Exception as e:
-        logger.error(f"ERROR: {str(e)}", exc_info=True)
-        
-        return {
-            'statusCode': 500,
-            'body': json.dumps({
-                'message': 'Error during scraping',
-                'error': str(e)
-            })
-        }
+        logger.error(f"Error in lambda_handler: {e}", exc_info=True)
+        raise

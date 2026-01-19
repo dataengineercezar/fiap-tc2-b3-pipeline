@@ -60,6 +60,31 @@ module "eventbridge" {
   depends_on = [module.lambda]
 }
 
+# Glue ETL Job + Catalog + Crawler
+module "glue" {
+  source = "./modules/glue"
+
+  project_name   = var.project_name
+  environment    = var.environment
+  s3_bucket_name = var.bucket_name
+  dataset        = var.dataset_name
+  ticker         = var.ticker
+  glue_version   = "4.0"
+  tags           = local.common_tags
+
+  depends_on = [module.s3]
+}
+
+# S3 Event Notification para acionar Lambda Trigger Glue
+module "s3_notification" {
+  source = "./modules/s3_notification"
+
+  s3_bucket_name          = var.bucket_name
+  lambda_trigger_glue_arn = module.lambda.trigger_glue_function_arn
+  lambda_permission_id    = module.lambda.s3_permission_id
+
+  depends_on = [module.lambda, module.glue]
+}
+
 # Modules to be added in subsequent stages
-# module "glue" { ... }
 # module "athena" { ... }
